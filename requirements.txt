@@ -1,6 +1,6 @@
 
-# Pinecone
-pinecone-client>=3.0.0
+# Pinecone - Use the newer 'pinecone' package (not pinecone-client)
+pinecone>=5.0.0
 
 # OpenAI
 openai>=1.12.0
