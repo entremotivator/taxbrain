@@ -357,28 +357,28 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     if st.button("🔄 Refresh Index Stats", use_container_width=True):
-    if not pc or not index or not openai_client:
-        st.error("⚠️ Please configure API keys in the sidebar first")
-    else:
-        try:
-            with st.spinner("Fetching index statistics..."):
-                stats = index.describe_index_stats()
-                
-                # Display metrics
-                metric_cols = st.columns(3)
-                with metric_cols[0]:
-                    st.metric("Total Vectors", f"{stats.get('total_vector_count', 0):,}")
-                with metric_cols[1]:
-                    st.metric("Dimension", stats.get('dimension', 'N/A'))
-                with metric_cols[2]:
-                    namespaces = stats.get('namespaces', {})
-                    st.metric("Namespaces", len(namespaces))
-                
-                # Show detailed stats
-                with st.expander("🔍 Detailed Statistics", expanded=False):
-                    st.json(stats)
-        except Exception as e:
-            st.error(f"❌ Failed to fetch index stats: {str(e)}")
+        if not pc or not index or not openai_client:
+            st.error("⚠️ Please configure API keys in the sidebar first")
+        else:
+            try:
+                with st.spinner("Fetching index statistics..."):
+                    stats = index.describe_index_stats()
+                    
+                    # Display metrics
+                    metric_cols = st.columns(3)
+                    with metric_cols[0]:
+                        st.metric("Total Vectors", f"{stats.get('total_vector_count', 0):,}")
+                    with metric_cols[1]:
+                        st.metric("Dimension", stats.get('dimension', 'N/A'))
+                    with metric_cols[2]:
+                        namespaces = stats.get('namespaces', {})
+                        st.metric("Namespaces", len(namespaces))
+                    
+                    # Show detailed stats
+                    with st.expander("🔍 Detailed Statistics", expanded=False):
+                        st.json(stats)
+            except Exception as e:
+                st.error(f"❌ Failed to fetch index stats: {str(e)}")
 
 with col2:
     if st.button("🗑️ Clear Namespace (Careful!)", use_container_width=True):
