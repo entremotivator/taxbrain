@@ -5,9 +5,10 @@ from datetime import datetime
 from pinecone import Pinecone
 from openai import OpenAI
 from pypdf import PdfReader
+from pinecone.exceptions import PineconeApiException
 
 # ==================================================
-# FIXED INDEX CONFIG (DO NOT CHANGE)
+# FIXED CONFIG
 # ==================================================
 INDEX_NAME = "wolf"
 PINECONE_HOST = "https://wolf-b79cc48.svc.aped-4627-b74a.pinecone.io"
@@ -25,6 +26,15 @@ st.set_page_config(
 )
 
 # ==================================================
+# SESSION STATE
+# ==================================================
+if "files_ingested" not in st.session_state:
+    st.session_state.files_ingested = set()
+
+if "chat" not in st.session_state:
+    st.session_state.chat = []
+
+# ==================================================
 # SIDEBAR
 # ==================================================
 with st.sidebar:
@@ -38,17 +48,14 @@ with st.sidebar:
     CHUNK_OVERLAP = st.slider("Chunk Overlap", 0, 500, 150, 50)
 
 # ==================================================
-# CLIENT INIT (HOST-BOUND INDEX)
+# CLIENT INIT
 # ==================================================
 @st.cache_resource(show_spinner=False)
 def init_clients(pinecone_key, openai_key):
     pc = Pinecone(api_key=pinecone_key)
-
-    # ⚠️ HOST-BOUND INDEX (NO NAMESPACE CONTROL)
     index = pc.Index(host=PINECONE_HOST)
-
     openai_client = OpenAI(api_key=openai_key)
-    return pc, index, openai_client
+    return index, openai_client
 
 # ==================================================
 # HELPERS
@@ -79,13 +86,22 @@ def embed(text):
     )
     return res.data[0].embedding
 
+def safe_query(index, vector, top_k=5):
+    try:
+        return index.query(
+            vector=vector,
+            top_k=top_k,
+            include_metadata=True
+        )
+    except PineconeApiException:
+        return None
+
 def rag_answer(question, matches):
     context = []
     for i, m in enumerate(matches, 1):
         context.append(f"[{i}] {m.metadata.get('text', '')}")
 
     prompt = f"""
-You are WOLF, an expert analyst.
 Answer ONLY using the context below.
 Cite sources using [1], [2], etc.
 
@@ -107,7 +123,7 @@ Answer:
     return res.choices[0].message.content
 
 # ==================================================
-# MAIN UI
+# UI
 # ==================================================
 st.markdown("<h1 style='text-align:center;'>🐺 WOLF RAG Intelligence</h1>", unsafe_allow_html=True)
 
@@ -115,12 +131,12 @@ if not PINECONE_API_KEY or not OPENAI_API_KEY:
     st.warning("Enter API keys to activate WOLF")
     st.stop()
 
-pc, index, openai_client = init_clients(PINECONE_API_KEY, OPENAI_API_KEY)
+index, openai_client = init_clients(PINECONE_API_KEY, OPENAI_API_KEY)
 
 # ==================================================
-# UPLOAD & INDEX
+# UPLOAD
 # ==================================================
-st.header("📤 Upload Documents")
+st.header("📤 Upload & Index")
 
 files = st.file_uploader(
     "Upload TXT or PDF",
@@ -130,10 +146,8 @@ files = st.file_uploader(
 
 if files and st.button("🚀 Index Documents", use_container_width=True):
     vectors = []
-    progress = st.progress(0)
 
-    for i, file in enumerate(files):
-        progress.progress(i / len(files))
+    for file in files:
         text = extract_text(file)
         chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
 
@@ -155,31 +169,43 @@ if files and st.button("🚀 Index Documents", use_container_width=True):
                 }
             })
 
-    # 🔥 NO namespace parameter
+        st.session_state.files_ingested.add(file.name)
+
     for i in range(0, len(vectors), 100):
         index.upsert(vectors=vectors[i:i + 100])
 
-    st.success(f"✅ Indexed {len(vectors)} chunks")
+    st.success(f"Indexed {len(vectors)} chunks")
 
 # ==================================================
-# DELETE BY FILE (SAFE)
+# VIEW INGESTED FILES (FIXED)
 # ==================================================
-st.header("🗂️ Delete by File")
+st.header("📂 Ingested Files")
 
-delete_file = st.text_input("Exact filename to delete")
-
-if st.button("🗑️ Delete Vectors", use_container_width=True):
-    if delete_file:
-        index.delete(filter={"source": {"$eq": delete_file}})
-        st.success(f"Deleted vectors for {delete_file}")
+if st.session_state.files_ingested:
+    for f in sorted(st.session_state.files_ingested):
+        st.write(f"• {f}")
+else:
+    st.info("No files indexed yet")
 
 # ==================================================
-# CHAT (RAG)
+# DELETE BY FILE
 # ==================================================
-st.header("💬 Chat With Your Documents")
+st.header("🗑️ Delete by File")
 
-if "chat" not in st.session_state:
-    st.session_state.chat = []
+delete_file = st.selectbox(
+    "Select file to delete",
+    options=[""] + sorted(st.session_state.files_ingested)
+)
+
+if delete_file and st.button("Delete File Vectors", use_container_width=True):
+    index.delete(filter={"source": {"$eq": delete_file}})
+    st.session_state.files_ingested.remove(delete_file)
+    st.success(f"Deleted {delete_file}")
+
+# ==================================================
+# CHAT
+# ==================================================
+st.header("💬 Chat")
 
 for msg in st.session_state.chat:
     with st.chat_message(msg["role"]):
@@ -190,15 +216,13 @@ question = st.chat_input("Ask WOLF...")
 if question:
     st.session_state.chat.append({"role": "user", "content": question})
 
-    with st.spinner("🐺 Thinking..."):
-        q_embed = embed(question)
+    q_embed = embed(question)
 
-        results = index.query(
-            vector=q_embed,
-            top_k=5,
-            include_metadata=True
-        )
+    results = safe_query(index, q_embed)
 
+    if not results or not results.matches:
+        answer = "⚠️ No indexed data available yet."
+    else:
         answer = rag_answer(question, results.matches)
 
     st.session_state.chat.append({
@@ -208,8 +232,5 @@ if question:
 
     st.rerun()
 
-# ==================================================
-# FOOTER
-# ==================================================
 st.divider()
-st.caption("🐺 WOLF • Pinecone Serverless • OpenAI • RAG • Stable")
+st.caption("🐺 WOLF • Pinecone Serverless • Stable")
