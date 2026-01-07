@@ -1,0 +1,9 @@
+
+# Pinecone
+pinecone-client>=3.0.0
+
+# OpenAI
+openai>=1.12.0
+
+# PDF Processing
+pypdf>=4.0.0
