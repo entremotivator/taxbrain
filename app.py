@@ -1,213 +1,236 @@
 import streamlit as st
 import uuid
-from datetime import datetime
 import time
+from datetime import datetime
 
 from pinecone import Pinecone
-from pypdf import PdfReader
 from openai import OpenAI
+from pypdf import PdfReader
 
-# --------------------------------------------------
-# Global Clients
-# --------------------------------------------------
-pc = None
-index = None
-openai_client = None
+# ==================================================
+# FIXED CONFIG (YOUR INDEX)
+# ==================================================
+INDEX_NAME = "wolf"
+PINECONE_HOST = "https://wolf-b79cc48.svc.aped-4627-b74a.pinecone.io"
+EMBED_MODEL = "text-embedding-3-small"
+EMBED_DIM = 1536
+NAMESPACE = "default"
 
-# --------------------------------------------------
-# Streamlit Config
-# --------------------------------------------------
+# ==================================================
+# STREAMLIT CONFIG
+# ==================================================
 st.set_page_config(
-    page_title="Pinecone Document Manager",
-    page_icon="📚",
+    page_title="🐺 WOLF • RAG Intelligence",
+    page_icon="🐺",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# --------------------------------------------------
-# Initialize Clients
-# --------------------------------------------------
-@st.cache_resource
-def initialize_clients(pinecone_key, openai_key, index_name):
+# ==================================================
+# SIDEBAR
+# ==================================================
+with st.sidebar:
+    st.title("🐺 WOLF AI")
+    st.caption("RAG • Chat • Vector Control")
+
+    st.divider()
+
+    PINECONE_API_KEY = st.text_input("Pinecone API Key", type="password")
+    OPENAI_API_KEY = st.text_input("OpenAI API Key", type="password")
+
+    st.divider()
+
+    CHUNK_SIZE = st.slider("Chunk Size", 300, 2000, 900, 100)
+    CHUNK_OVERLAP = st.slider("Chunk Overlap", 0, 500, 150, 50)
+
+    st.divider()
+    st.info(
+        f"**Index:** wolf\n\n"
+        f"**Host:** connected\n\n"
+        f"**Embedding:** {EMBED_MODEL}\n\n"
+        f"**Namespace:** default"
+    )
+
+# ==================================================
+# CLIENT INIT
+# ==================================================
+@st.cache_resource(show_spinner=False)
+def init_clients(pinecone_key, openai_key):
     pc = Pinecone(api_key=pinecone_key)
-    index = pc.Index(index_name)
+    index = pc.Index(name=INDEX_NAME, host=PINECONE_HOST)
     openai_client = OpenAI(api_key=openai_key)
     return pc, index, openai_client
 
-# --------------------------------------------------
-# Helpers
-# --------------------------------------------------
+# ==================================================
+# HELPERS
+# ==================================================
 def extract_text(file):
-    try:
-        if file.type == "text/plain":
-            return file.read().decode("utf-8")
+    if file.type == "text/plain":
+        return file.read().decode("utf-8")
 
-        if file.type == "application/pdf":
-            reader = PdfReader(file)
-            return "\n".join(
-                page.extract_text() or "" for page in reader.pages
-            )
-
-    except Exception as e:
-        st.error(f"Text extraction failed: {e}")
+    if file.type == "application/pdf":
+        reader = PdfReader(file)
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
 
     return ""
 
-def chunk_text(text, size=800, overlap=100):
+def chunk_text(text, size, overlap):
     words = text.split()
     chunks = []
 
     for i in range(0, len(words), size - overlap):
-        chunk = " ".join(words[i : i + size])
+        chunk = " ".join(words[i:i + size])
         if chunk.strip():
             chunks.append(chunk)
 
     return chunks
 
-def embed_text(text):
-    response = openai_client.embeddings.create(
-        model="text-embedding-3-small",
+def embed(text):
+    res = openai_client.embeddings.create(
+        model=EMBED_MODEL,
         input=text
     )
-    return response.data[0].embedding
+    return res.data[0].embedding
 
-def format_bytes(size):
-    for unit in ["B", "KB", "MB", "GB"]:
-        if size < 1024:
-            return f"{size:.2f} {unit}"
-        size /= 1024
-    return "TB+"
+def rag_answer(question, matches):
+    context_blocks = []
+    citations = []
 
-# --------------------------------------------------
-# Sidebar
-# --------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ Configuration")
+    for i, m in enumerate(matches, 1):
+        text = m.metadata.get("text", "")
+        source = m.metadata.get("source", "unknown")
+        context_blocks.append(f"[{i}] {text}")
+        citations.append(f"[{i}] {source}")
 
-    pinecone_key = st.text_input("Pinecone API Key", type="password")
-    openai_key = st.text_input("OpenAI API Key", type="password")
-    index_name = st.text_input("Index Name", value="quickstart")
+    prompt = f"""
+You are WOLF, an expert document analyst.
 
-    if pinecone_key and openai_key:
-        try:
-            pc, index, openai_client = initialize_clients(
-                pinecone_key, openai_key, index_name
-            )
-            st.success("Clients initialized")
-        except Exception as e:
-            st.error(e)
-    else:
-        st.warning("Enter both API keys")
+Answer the question using ONLY the context below.
+Cite sources using bracket numbers like [1], [2].
 
-    st.divider()
-    chunk_size = st.slider("Chunk Size", 200, 2000, 800, 100)
-    overlap = st.slider("Overlap", 0, 500, 100, 50)
+Context:
+{chr(10).join(context_blocks)}
 
-# --------------------------------------------------
-# Main UI
-# --------------------------------------------------
-st.title("📚 Pinecone Document Manager")
+Question:
+{question}
 
-st.markdown("""
-Upload **TXT or PDF** files → chunk → embed → store in Pinecone  
-Perfect for **RAG, chatbots, and semantic search**
-""")
+Answer:
+"""
 
-# --------------------------------------------------
-# Upload Section
-# --------------------------------------------------
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
+    )
+
+    return response.choices[0].message.content, citations
+
+# ==================================================
+# MAIN HEADER
+# ==================================================
+st.markdown("<h1 style='text-align:center;'>🐺 WOLF RAG Intelligence</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;'>Upload • Search • Chat • Control</p>", unsafe_allow_html=True)
+
+# ==================================================
+# AUTH CHECK
+# ==================================================
+if not PINECONE_API_KEY or not OPENAI_API_KEY:
+    st.warning("🔑 Enter API keys to activate WOLF")
+    st.stop()
+
+pc, index, openai_client = init_clients(PINECONE_API_KEY, OPENAI_API_KEY)
+
+# ==================================================
+# FILE UPLOAD
+# ==================================================
+st.header("📤 Document Upload")
+
 files = st.file_uploader(
-    "Upload Documents",
+    "Upload TXT or PDF",
     type=["txt", "pdf"],
     accept_multiple_files=True
 )
 
-if files and st.button("🚀 Process & Upload", use_container_width=True):
-
-    if not index or not openai_client:
-        st.error("Clients not initialized")
-        st.stop()
-
-    progress = st.progress(0)
-    status = st.empty()
-
+if files and st.button("🚀 Index Documents", use_container_width=True):
     vectors = []
-    total_chunks = 0
+    progress = st.progress(0)
 
     for i, file in enumerate(files):
-        status.text(f"Processing {file.name}")
         progress.progress(i / len(files))
-
         text = extract_text(file)
-        chunks = chunk_text(text, chunk_size, overlap)
-        total_chunks += len(chunks)
+        chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
 
         for idx, chunk in enumerate(chunks):
-            embedding = embed_text(chunk)
-
             vectors.append({
                 "id": str(uuid.uuid4()),
-                "values": embedding,
+                "values": embed(chunk),
                 "metadata": {
                     "source": file.name,
                     "chunk": idx,
                     "text": chunk[:1000],
-                    "created": datetime.utcnow().isoformat()
+                    "indexed_at": datetime.utcnow().isoformat()
                 }
             })
 
-    # Upload in batches
-    status.text("Uploading to Pinecone...")
     for i in range(0, len(vectors), 100):
-        index.upsert(vectors=vectors[i:i + 100])
+        index.upsert(vectors=vectors[i:i + 100], namespace=NAMESPACE)
 
-    progress.progress(1.0)
-    status.empty()
+    st.success(f"✅ Indexed {len(vectors)} chunks")
 
-    st.success(f"✅ Uploaded {len(vectors)} vectors from {len(files)} files")
+# ==================================================
+# DELETE BY FILE
+# ==================================================
+st.header("🗂️ Delete by File")
 
-# --------------------------------------------------
-# Index Stats
-# --------------------------------------------------
-st.header("📊 Index Stats")
+delete_file = st.text_input("Exact filename to delete (case-sensitive)")
 
-if st.button("Refresh Stats"):
-    if index:
-        stats = index.describe_index_stats()
-        st.json(stats)
+if st.button("🗑️ Delete File Vectors", use_container_width=True):
+    if delete_file:
+        index.delete(
+            namespace=NAMESPACE,
+            filter={"source": {"$eq": delete_file}}
+        )
+        st.success(f"Deleted vectors for {delete_file}")
     else:
-        st.warning("Index not initialized")
+        st.warning("Enter a filename")
 
-# --------------------------------------------------
-# Semantic Search
-# --------------------------------------------------
-st.header("🔍 Semantic Search")
+# ==================================================
+# CHAT UI (RAG)
+# ==================================================
+st.header("💬 Chat With Your Documents")
 
-query = st.text_input("Ask a question")
-top_k = st.slider("Top K", 1, 20, 5)
+if "chat" not in st.session_state:
+    st.session_state.chat = []
 
-if query and st.button("Search"):
-    if not index:
-        st.error("Index not initialized")
-        st.stop()
+for msg in st.session_state.chat:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-    with st.spinner("Searching..."):
-        query_embedding = embed_text(query)
+query = st.chat_input("Ask WOLF...")
+
+if query:
+    st.session_state.chat.append({"role": "user", "content": query})
+
+    with st.spinner("🐺 WOLF is thinking..."):
+        q_embed = embed(query)
         results = index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            include_metadata=True
+            vector=q_embed,
+            top_k=5,
+            include_metadata=True,
+            namespace=NAMESPACE
         )
 
-        if results["matches"]:
-            for i, match in enumerate(results["matches"], 1):
-                st.subheader(f"Result {i} — Score {match['score']:.4f}")
-                st.info(match["metadata"].get("text", ""))
-        else:
-            st.warning("No results found")
+        answer, citations = rag_answer(query, results.matches)
 
-# --------------------------------------------------
-# Footer
-# --------------------------------------------------
+    st.session_state.chat.append({
+        "role": "assistant",
+        "content": f"{answer}\n\n**Sources:** {', '.join(citations)}"
+    })
+
+    st.rerun()
+
+# ==================================================
+# FOOTER
+# ==================================================
 st.divider()
-st.caption("Streamlit • Pinecone • OpenAI — Upload → Embed → Search")
+st.caption("🐺 WOLF • Pinecone • OpenAI • RAG • Chat • Control")
