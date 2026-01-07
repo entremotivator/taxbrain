@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import uuid
 from datetime import datetime
 from pinecone import Pinecone
@@ -9,34 +9,28 @@ import time
 # --------------------------------------------------
 # Load Configuration from Streamlit Secrets
 # --------------------------------------------------
-try:
-    PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
-    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-    INDEX_NAME = st.secrets.get("PINECONE_INDEX", "quickstart")
-except KeyError as e:
-    st.error(f"⚠️ Missing secret: {e}. Please configure in Streamlit Cloud settings.")
-    st.stop()
+# API keys will be entered in the sidebar
+PINECONE_API_KEY = None
+OPENAI_API_KEY = None
+INDEX_NAME = "quickstart"
 
 # --------------------------------------------------
 # Initialize Clients with Error Handling
 # --------------------------------------------------
 @st.cache_resource
-def initialize_clients():
+def initialize_clients(_pinecone_key, _openai_key, _index_name):
     """Initialize and cache Pinecone and OpenAI clients"""
     try:
-        if not PINECONE_API_KEY or not OPENAI_API_KEY:
-            st.error("⚠️ Missing API keys! Please check your Streamlit secrets configuration.")
-            st.stop()
+        if not _pinecone_key or not _openai_key:
+            return None, None, None
         
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        index = pc.Index(INDEX_NAME)
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        pc = Pinecone(api_key=_pinecone_key)
+        index = pc.Index(_index_name)
+        openai_client = OpenAI(api_key=_openai_key)
         return pc, index, openai_client
     except Exception as e:
         st.error(f"❌ Failed to initialize clients: {str(e)}")
-        st.stop()
-
-pc, index, openai_client = initialize_clients()
+        return None, None, None
 
 # --------------------------------------------------
 # Helper Functions
@@ -140,25 +134,35 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # API Keys & Secrets Info
-    st.subheader("🔑 Secrets Configuration")
+    # API Keys Input
+    st.subheader("🔑 API Keys")
     
-    # Show masked API keys
-    if PINECONE_API_KEY:
-        masked_pinecone = PINECONE_API_KEY[:8] + "..." + PINECONE_API_KEY[-4:] if len(PINECONE_API_KEY) > 12 else "***"
-        st.text_input("Pinecone API Key", value=masked_pinecone, disabled=True, type="password")
+    PINECONE_API_KEY = st.text_input(
+        "Pinecone API Key",
+        type="password",
+        help="Enter your Pinecone API key",
+        key="pinecone_key"
+    )
+    
+    OPENAI_API_KEY = st.text_input(
+        "OpenAI API Key",
+        type="password",
+        help="Enter your OpenAI API key",
+        key="openai_key"
+    )
+    
+    INDEX_NAME = st.text_input(
+        "Pinecone Index Name",
+        value="quickstart",
+        help="Enter your Pinecone index name",
+        key="index_name"
+    )
+    
+    # Validation
+    if not PINECONE_API_KEY or not OPENAI_API_KEY:
+        st.warning("⚠️ Please enter both API keys to continue")
     else:
-        st.warning("⚠️ Pinecone API Key not set")
-    
-    if OPENAI_API_KEY:
-        masked_openai = OPENAI_API_KEY[:8] + "..." + OPENAI_API_KEY[-4:] if len(OPENAI_API_KEY) > 12 else "***"
-        st.text_input("OpenAI API Key", value=masked_openai, disabled=True, type="password")
-    else:
-        st.warning("⚠️ OpenAI API Key not set")
-    
-    st.text_input("Pinecone Index", value=INDEX_NAME, disabled=True)
-    
-    st.caption("💡 Configure these in Streamlit Cloud settings under 'Secrets'")
+        st.success("✅ API keys configured")
     
     # Pinecone Version Info
     st.subheader("🌲 Pinecone Info")
@@ -170,6 +174,12 @@ with st.sidebar:
         st.info("**Version:** Unable to detect")
     
     st.divider()
+    
+    # Initialize clients with sidebar inputs
+    if PINECONE_API_KEY and OPENAI_API_KEY:
+        pc, index, openai_client = initialize_clients(PINECONE_API_KEY, OPENAI_API_KEY, INDEX_NAME)
+    else:
+        pc, index, openai_client = None, None, None
     
     st.subheader("Processing Options")
     chunk_size = st.slider("Chunk Size (words)", 200, 2000, 800, 100)
@@ -224,6 +234,15 @@ with col2:
         st.metric("Total Size", format_file_size(total_size))
 
 if uploaded_files:
+    # Check if API keys are configured
+    if not PINECONE_API_KEY or not OPENAI_API_KEY:
+        st.error("⚠️ Please enter your API keys in the sidebar to continue")
+        st.stop()
+    
+    if not pc or not index or not openai_client:
+        st.error("❌ Failed to initialize clients. Please check your API keys.")
+        st.stop()
+    
     # Display file preview
     with st.expander("📋 View Selected Files", expanded=False):
         for file in uploaded_files:
@@ -338,6 +357,9 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     if st.button("🔄 Refresh Index Stats", use_container_width=True):
+    if not pc or not index or not openai_client:
+        st.error("⚠️ Please configure API keys in the sidebar first")
+    else:
         try:
             with st.spinner("Fetching index statistics..."):
                 stats = index.describe_index_stats()
@@ -360,7 +382,9 @@ with col1:
 
 with col2:
     if st.button("🗑️ Clear Namespace (Careful!)", use_container_width=True):
-        if st.checkbox("I understand this will delete all vectors"):
+        if not pc or not index or not openai_client:
+            st.error("⚠️ Please configure API keys in the sidebar first")
+        elif st.checkbox("I understand this will delete all vectors"):
             try:
                 index.delete(delete_all=True)
                 st.success("✅ Namespace cleared successfully")
@@ -386,7 +410,10 @@ with col2:
 
 if query_text:
     if st.button("🔍 Search", type="primary", use_container_width=True):
-        try:
+        if not pc or not index or not openai_client:
+            st.error("⚠️ Please configure API keys in the sidebar first")
+        else:
+            try:
             with st.spinner("Searching..."):
                 query_embedding = embed_text(query_text)
                 results = index.query(
